@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 import string
 
+CHAR_TO_BIT: dict[str, int] = {c: 1 << i for i, c in enumerate(string.ascii_lowercase)}
+
 CHAMPS = [
         'aatrox', 'ahri', 'akali', 'akshan', 'alistar', 'ambessa', 'amumu',
         'anivia', 'annie', 'aphelios', 'ashe', 'aurelionsol', 'aurora',
@@ -36,7 +38,7 @@ CHAMPS = [
 @dataclass
 class Champion:
     name: str
-    unique_chars: set[str]
+    char_mask: int  # represents unique characters in name
 
 
 class BestTeamsFinder:
@@ -56,13 +58,13 @@ class BestTeamsFinder:
 
         self._champs = self._create_champion_objects(normalized_names)
         self._champs.sort(
-            key=lambda champ: sum(char_rarity_scores[c] for c in champ.unique_chars),
+            key=lambda champ: self._score_mask(champ.char_mask, char_rarity_scores),
             reverse=True,
         )
 
-        self._unique_chars_for_suffix = self._compute_unique_chars_for_suffixes(
-            self._champs
-        )
+        # Precompute the cumulative OR of char masks from each champ to the end,
+        # used to prune search branches that can't improve best result.
+        self._suffix_char_masks = self._compute_suffix_char_masks(self._champs)
 
         self._best_unique_char_count = 0
         self._best_teams = []
@@ -75,12 +77,12 @@ class BestTeamsFinder:
             List of best teams found. Each team is a list of champions.
         """
         # Start search with all champs available + empty initial team
-        self._recurse(0, [], set())
+        self._recurse(0, [], 0)
 
         return self._best_teams
 
     def _recurse(
-        self, idx: int, current_team: list[Champion], current_unique_chars: set[str]
+        self, idx: int, current_team: list[Champion], current_mask: int
     ) -> None:
         """
         Recursively search for teams, using specified state as the start.
@@ -88,11 +90,11 @@ class BestTeamsFinder:
         Args:
             idx: Marks the remaining champs we can use from _champs during the search
             current_team: Currently selected champions.
-            current_unique_chars: Set of unique letters for current_team.
+            current_mask: mask representing all unique letters for current_team.
         """
         # Compare completed team against existing candidates
         if len(current_team) == self._team_size:
-            unique_char_count = len(current_unique_chars)
+            unique_char_count = current_mask.bit_count()
             if unique_char_count > self._best_unique_char_count:
                 self._best_unique_char_count = unique_char_count
                 self._best_teams = [current_team[:]]
@@ -108,49 +110,49 @@ class BestTeamsFinder:
             return
 
         # Prune if current team's letters + all remaining letters available can't beat/equal best found so far
-        max_possible_chars = current_unique_chars | self._unique_chars_for_suffix[idx]
-        if len(max_possible_chars) < self._best_unique_char_count:
+        max_possible_mask = current_mask | self._suffix_char_masks[idx]
+        if max_possible_mask.bit_count() < self._best_unique_char_count:
             return
 
         # Try adding each remaining champ to current team and continue search
         for next_idx in range(idx, len(self._champs)):
             new_champ = self._champs[next_idx]
-            new_unique_chars = current_unique_chars | new_champ.unique_chars
-            self._recurse(next_idx + 1, current_team + [new_champ], new_unique_chars)
+            new_char_mask = current_mask | new_champ.char_mask
+            self._recurse(next_idx + 1, current_team + [new_champ], new_char_mask)
 
     def _normalize_names(self, champs: list[str]) -> list[str]:
         """Given a list of names, lowercase them and filter for alphabet letters only"""
         return ["".join(filter(str.isalpha, name.lower())) for name in champs]
 
-    def _compute_char_frequencies(self, names: list[str]) -> Counter:
+    def _compute_char_frequencies(self, names: list[str]) -> dict[str, int]:
         """Count letters by how many names it appears in."""
         return Counter(char for name in names for char in set(name))
 
-    def _compute_char_rarity_scores(self, freqs: Counter[str]) -> dict[str, float]:
-        """Generate rarity scores based on character frequncies."""
+    def _compute_char_rarity_scores(self, freqs: dict[str, int]) -> dict[str, float]:
+        """Generate rarity scores based on character frequencies."""
         # The **100 beneficially exaggerates the value of rarer characters.
         return {char: 1 / (freq**100) for char, freq in freqs.items()}
 
+    def _score_mask(self, mask: int, scores: dict[str, float]) -> float:
+        """Get total rarity score for mask by summing rarity scores of its chars"""
+        # sum works since CHAR_TO_BIT items are guaranteed not to overlaps
+        return sum(scores[c] for c, bit in CHAR_TO_BIT.items() if mask & bit)
+
     def _create_champion_objects(self, names: list[str]) -> list[Champion]:
         return [
-            Champion(
-                name=name,
-                unique_chars=set(name),
-            )
+            Champion(name=name, char_mask=sum(CHAR_TO_BIT[c] for c in set(name)))
             for name in names
         ]
 
-    def _compute_unique_chars_for_suffixes(
-        self, champs: list[Champion]
-    ) -> list[set[str]]:
+    def _compute_suffix_char_masks(self, champs: list[Champion]) -> list[int]:
         """Returns a list such that at index `i`, we have the set of unique characters for the suffix `champs[i:]`"""
-        suffix_sets = []
-        acc = set()
+        suffix_char_masks = []
+        acc = 0
         for champ in reversed(champs):
-            acc |= champ.unique_chars
-            suffix_sets.append(acc.copy())
-        suffix_sets.reverse()
-        return suffix_sets
+            acc |= champ.char_mask
+            suffix_char_masks.append(acc)
+        suffix_char_masks.reverse()
+        return suffix_char_masks
 
 
 if __name__ == "__main__":
@@ -159,11 +161,14 @@ if __name__ == "__main__":
     solver = BestTeamsFinder(champ_names, team_size)
     best_teams = solver.solve()
 
-    # Display best teams and their missing letters
     for i, team in enumerate(best_teams):
         print(f"Team {i + 1}:")
-        print("\n".join(champ.name for champ in team))
-        used_chars = set.union(*(champ.unique_chars for champ in team))
+        for champ in team:
+            print(champ.name)
+        team_mask = 0
+        for champ in team:
+            team_mask |= champ.char_mask
+        used_chars = {c for c, bit in CHAR_TO_BIT.items() if team_mask & bit}
         missing_chars = "".join(sorted(set(string.ascii_lowercase) - used_chars))
         print(f"missing chars: {len(missing_chars)} ({missing_chars})")
         print()
