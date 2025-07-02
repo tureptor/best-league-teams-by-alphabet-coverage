@@ -43,15 +43,13 @@ class Champion:
 
 class BestTeamsFinder:
     """
-    Single-use class used to find teams with the best alphabet coverage.
+    Class used to find teams with the best alphabet coverage.
     Teams are built up to the specified size using the provided names.
 
     Call the `solve` method to generate results.
     """
 
-    def __init__(self, champ_names: list[str], team_size: int):
-        self._team_size = team_size
-
+    def __init__(self, champ_names: list[str]):
         normalized_names = self._normalize_names(champ_names)
         char_freq = self._compute_char_frequencies(normalized_names)
         char_rarity_scores = self._compute_char_rarity_scores(char_freq)
@@ -69,14 +67,19 @@ class BestTeamsFinder:
         self._best_unique_char_count = 0
         self._best_teams = []
 
-    def solve(self) -> list[list[Champion]]:
+    def solve(self, team_size: int) -> list[list[Champion]]:
         """
         Finds the best teams maximizing unique character coverage.
+        
+        Args:
+            team_size: The team size to search for. 
 
         Returns:
             List of best teams found. Each team is a list of champions.
         """
         # Start search with all champs available + empty initial team
+        self._team_size: int = team_size
+
         self._recurse(0, [], 0)
 
         return self._best_teams
@@ -135,7 +138,7 @@ class BestTeamsFinder:
 
     def _score_mask(self, mask: int, scores: dict[str, float]) -> float:
         """Get total rarity score for mask by summing rarity scores of its chars"""
-        # sum works since CHAR_TO_BIT items are guaranteed not to overlaps
+        # sum works since CHAR_TO_BIT items are guaranteed not to overlap
         return sum(scores[c] for c, bit in CHAR_TO_BIT.items() if mask & bit)
 
     def _create_champion_objects(self, names: list[str]) -> list[Champion]:
@@ -158,8 +161,8 @@ class BestTeamsFinder:
 if __name__ == "__main__":
     team_size = 5  # adjust as desired
     champ_names = CHAMPS  # could use e.g. list of full champ titles instead of CHAMPS
-    solver = BestTeamsFinder(champ_names, team_size)
-    best_teams = solver.solve()
+    solver = BestTeamsFinder(champ_names)
+    best_teams = solver.solve(team_size)
 
     for i, team in enumerate(best_teams):
         print(f"Team {i + 1}:")
